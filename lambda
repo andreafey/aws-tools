@@ -1,0 +1,179 @@
+#! /bin/bash
+
+
+# get_role ROLE_NAME
+# prints the arn for the role
+function get_role()
+{
+if [[ $1 == arn* ]]
+then
+    role=$1
+else
+    role=$(aws iam get-role --role-name $1 --query "Role.Arn" --output text)
+fi
+
+echo $role
+}
+
+# get_function FUNCTION_NAME
+# prints the arn for the function
+function get_function()
+{
+echo $(aws lambda get-function --function-name $1 --query "Configuration.FunctionArn" --output text)
+}
+
+# get_gateway_rapid GATEWAY_NAME
+# prints the rest-api-id for the gateway
+function get_gateway_rapid()
+{
+cmd="aws apigateway get-rest-apis --query 'items[?name==\`$1\`].id' --output text"
+echo $(eval $cmd)
+}
+
+# get_resource_id GATEWAY_NAME
+# prints resource-id for the gateway
+function get_resource_id()
+{
+# gateway_name=$1
+path=$2
+rapid=$(get_gateway_rapid $1)
+cmd="aws apigateway get-resources --rest-api-id $rapid --query 'items[?path==\`$path\`].id' --output text"
+echo $(eval $cmd)
+}
+
+function create_help()
+{
+echo "create FUNCTION_NAME S3BUCKET S3KEY HANDLER AWS_ROLE [AWS_REGION]"
+}
+
+# create FUNCTION_NAME S3BUCKET S3KEY HANDLER AWS_ROLE [AWS_REGION]
+# creates a lambda function which points to code in s3
+function create()
+{
+if [ $# -lt 5 ]
+then
+    create_help
+    exit 1
+else
+    fname=$1
+    s3bucket=$2
+    s3key=$3
+    handler=$4
+    role=$(get_role $5)
+    if [ $# -eq 6 ]
+    then
+        region=$6
+    else
+        region='us-east-1'
+    fi
+    cmd="aws lambda create-function --function-name $fname --code S3Bucket=$s3bucket,S3Key=$s3key --handler $handler --runtime nodejs4.3 --region $region --role '$role'"
+    echo $cmd
+    `$cmd`
+    exit 0
+fi
+}
+
+function update_help()
+{
+echo "update FUNCTION_NAME S3BUCKET S3KEY"
+}
+
+# update FUNCTION_NAME S3BUCKET S3KEY
+# updates and publishes existing lambda function with new code
+function update()
+{
+if [ $# -ne 3 ]
+then
+    update_help
+    exit 1
+fi
+fname=$1
+s3bucket=$2
+s3key=$3
+
+cmd="aws lambda update-function-code --function-name $fname --s3-bucket $s3bucket --s3-key $s3key --publish"
+echo $cmd
+`$cmd`
+}
+
+function api_to_lambda_help()
+{
+echo "api_to_lambda gw_name path"
+}
+
+# api_to_lambda GATEWAY_NAME PATH FUNCTION_NAME ROLE
+# creates an apigateway resource at path which invokes the function
+# TODO assumes a lot of things like get, us-east-1 and probably more stuff
+function api_to_lambda()
+{
+# the name of the api gateway
+gwname=$1
+
+# the path of the resource we're creating on the gateway
+# for expediency, assuming this is a resource at /$pathPart; better to parse the path for the resource root
+pathPart=$2
+func_name=$3
+role=$4
+
+# --rest-api-id of api-gateway with above name
+rapid=$(eval get_gateway_rapid $1)
+echo "apigateway $gwname id=$rapid"
+
+# get the resource id of the root path url (/) in the gateway
+cmd="aws apigateway get-resources --rest-api-id $rapid --query 'items[?path==\`/\`].id' --output text"
+echo $cmd
+parentid=$(eval $cmd)
+echo "/ resource-id=$parentid"
+
+# create the resource on the gateway
+if [ "$pathPart" != "" ]
+then 
+cmd="aws apigateway create-resource --rest-api-id $rapid --parent-id $parentid --path-part $pathPart"
+echo $cmd
+$cmd
+
+# get the id of the resource just created
+cmd="aws apigateway get-resources --rest-api-id $rapid --query 'items[?pathPart==\`$pathPart\`].id' --output text"
+echo "/$pathPart resource-id=$resid"
+resid=$(eval $cmd)
+else
+resid=$parentid
+echo "path=/$pathPart (root), resource-id=$resid"
+fi
+
+# add GET method to resource
+cmd="aws apigateway put-method --rest-api-id $rapid --http-method GET --resource-id $resid --authorization-type NONE"
+echo $cmd
+`$cmd`
+echo "GET method added to /$pathPart"
+
+cmd="path_to_lambda $gwname $pathPart $func_name $role_name"
+echo $cmd
+`$cmd`
+}
+
+# path_to_lambda GATEWAY_NAME PATH FUNCTION_NAME ROLE
+# creates an integration from an apigateway to a lambda function
+# TODO presumes GET request and us-east-1 region
+function path_to_lambda()
+{
+# gateway name $1
+# resource path $2
+rapid=$(get_gateway_rapid $1)
+resid=$(get_resource_id $1 $2)
+
+# arn:aws:lambda:us-east-1:account-id:function:home
+func_arn=$(get_function $3)
+role=$(get_role $4)
+region="us-east-1"
+
+# --uri arn:aws:apigateway:aws-region:lambda:path/2015-03-31/functions/arn:aws:lambda:aws-region:aws-acct-id:function:your-lambda-function-name/invocations
+
+uri="arn:aws:apigateway:$region:lambda:path/2015-03-31/functions/$func_arn/invocations"
+
+cmd="aws apigateway put-integration --rest-api-id $rapid --resource-id $resid --http-method GET --type AWS --integration-http-method GET --uri $uri --credentials $role"
+echo "$cmd"
+`$cmd`
+}
+
+$@
