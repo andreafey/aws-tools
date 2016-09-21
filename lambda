@@ -27,7 +27,7 @@ echo $(aws lambda get-function --function-name $1 --query "Configuration.Functio
 function get_gateway_rapid()
 {
 cmd="aws apigateway get-rest-apis --query 'items[?name==\`$1\`].id' --output text"
-echo $(eval $cmd)
+echo $(eval "$cmd")
 }
 
 # get_resource_id GATEWAY_NAME
@@ -37,8 +37,8 @@ function get_resource_id()
 # gateway_name=$1
 path=$2
 rapid=$(get_gateway_rapid $1)
-cmd="aws apigateway get-resources --rest-api-id $rapid --query 'items[?path==\`$path\`].id' --output text"
-echo $(eval $cmd)
+cmd="aws apigateway get-resources --rest-api-id $rapid --query 'items[?pathPart==\`$path\`].id' --output text"
+echo $(eval "$cmd")
 }
 
 function create_help()
@@ -55,20 +55,20 @@ then
     create_help
     exit 1
 else
-    fname=$1
-    s3bucket=$2
-    s3key=$3
-    handler=$4
-    role=$(get_role $5)
+    fname="$1"
+    s3bucket="$2"
+    s3key="$3"
+    handler="$4"
+    role=$("get_role $5")
     if [ $# -eq 6 ]
     then
-        region=$6
+        region="$6"
     else
         region='us-east-1'
     fi
     cmd="aws lambda create-function --function-name $fname --code S3Bucket=$s3bucket,S3Key=$s3key --handler $handler --runtime nodejs4.3 --region $region --role '$role'"
     echo $cmd
-    `$cmd`
+    eval "$cmd"
     exit 0
 fi
 }
@@ -93,7 +93,7 @@ s3key=$3
 
 cmd="aws lambda update-function-code --function-name $fname --s3-bucket $s3bucket --s3-key $s3key --publish"
 echo $cmd
-`$cmd`
+eval "$cmd"
 }
 
 function api_to_lambda_help()
@@ -107,13 +107,13 @@ echo "api_to_lambda gw_name path"
 function api_to_lambda()
 {
 # the name of the api gateway
-gwname=$1
+gwname="$1"
 
 # the path of the resource we're creating on the gateway
 # for expediency, assuming this is a resource at /$pathPart; better to parse the path for the resource root
-pathPart=$2
-func_name=$3
-role=$4
+pathPart="$2"
+func_name="$3"
+role="$4"
 
 # --rest-api-id of api-gateway with above name
 rapid=$(eval get_gateway_rapid $1)
@@ -122,7 +122,7 @@ echo "apigateway $gwname id=$rapid"
 # get the resource id of the root path url (/) in the gateway
 cmd="aws apigateway get-resources --rest-api-id $rapid --query 'items[?path==\`/\`].id' --output text"
 echo $cmd
-parentid=$(eval $cmd)
+parentid=$(eval "$cmd")
 echo "/ resource-id=$parentid"
 
 # create the resource on the gateway
@@ -130,26 +130,26 @@ if [ "$pathPart" != "" ]
 then 
 cmd="aws apigateway create-resource --rest-api-id $rapid --parent-id $parentid --path-part $pathPart"
 echo $cmd
-$cmd
+eval "$cmd"
 
 # get the id of the resource just created
 cmd="aws apigateway get-resources --rest-api-id $rapid --query 'items[?pathPart==\`$pathPart\`].id' --output text"
-echo "/$pathPart resource-id=$resid"
 resid=$(eval $cmd)
+echo "/$pathPart resource-id=$resid"
 else
 resid=$parentid
-echo "path=/$pathPart (root), resource-id=$resid"
+echo "path=/ (root), resource-id=$resid"
 fi
 
 # add GET method to resource
 cmd="aws apigateway put-method --rest-api-id $rapid --http-method GET --resource-id $resid --authorization-type NONE"
 echo $cmd
-`$cmd`
+eval "$cmd"
 echo "GET method added to /$pathPart"
 
-cmd="path_to_lambda $gwname $pathPart $func_name $role_name"
+cmd="path_to_lambda $gwname $pathPart $func_name $role"
 echo $cmd
-`$cmd`
+eval "$cmd"
 }
 
 # path_to_lambda GATEWAY_NAME PATH FUNCTION_NAME ROLE
@@ -171,12 +171,39 @@ region="us-east-1"
 
 uri="arn:aws:apigateway:$region:lambda:path/2015-03-31/functions/$func_arn/invocations"
 
-# save yourself a lot of heartach and make sure your --integration-http-method is POST as is required by lambda invocation
+# save yourself a lot of heartache and make sure your --integration-http-method is POST as is required by lambda invocation
 # https://forums.aws.amazon.com/thread.jspa?threadID=209420
 # http://docs.aws.amazon.com/lambda/latest/dg/API_Invoke.html
 cmd="aws apigateway put-integration --rest-api-id $rapid --resource-id $resid --http-method GET --type AWS --integration-http-method POST --uri $uri --credentials $role"
-echo "$cmd"
-`$cmd`
+echo $cmd
+eval "$cmd"
 }
+
+# lambda_response_to_api GATEWAY_NAME PATH [HTTP_METHOD [STATUS_CODE]]
+function lambda_response_to_api()
+{
+rapid=$("get_gateway_rapid $1")
+resid=$("get_resource_id $1 $2")
+if [ $# -gt 2 ]
+then
+    http_method="$3"
+else
+    http_method=GET
+fi
+
+if [ $# == 4 ]
+then
+    status_code="$4"
+else
+    status_code=200
+fi
+
+template='{"application/json":""}'
+
+cmd="aws apigateway put-integration-response --rest-api-id $rapid --resource-id $resid --http-method $http_method --status-code $status_code --response-templates '$template'"
+echo $cmd
+eval "$cmd"
+}
+
 
 $@
