@@ -59,7 +59,7 @@ else
     s3bucket="$2"
     s3key="$3"
     handler="$4"
-    role=$("get_role $5")
+    role=$(get_role "$5")
     if [ $# -eq 6 ]
     then
         region="$6"
@@ -182,8 +182,8 @@ eval "$cmd"
 # lambda_response_to_api GATEWAY_NAME PATH [HTTP_METHOD [STATUS_CODE]]
 function lambda_response_to_api()
 {
-rapid=$("get_gateway_rapid $1")
-resid=$("get_resource_id $1 $2")
+rapid=$(eval "get_gateway_rapid $1")
+resid=$(eval "get_resource_id $1 $2")
 if [ $# -gt 2 ]
 then
     http_method="$3"
